@@ -34,6 +34,120 @@ try {
 }
 // =============================================
 
+// === CREATE CATEGORIES TABLE IF MISSING ===
+try {
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      icon TEXT DEFAULT '💊',
+      icon_url TEXT DEFAULT '',
+      sort_order INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+} catch (err) {
+  console.error("❌ FAILED TO CREATE categories TABLE:", err.message);
+}
+// ==========================================
+
+// === ADD "packing" COLUMN TO products IF MISSING ===
+try {
+  db.prepare("ALTER TABLE products ADD COLUMN packing TEXT DEFAULT ''").run();
+} catch (err) {
+  // Column already exists — safe to ignore
+}
+// =================================================
+
+// === AUTO-SEED PRODUCTS ON FIRST STARTUP ===
+try {
+  const productCount = db.prepare("SELECT COUNT(*) as c FROM products").get().c;
+
+  if (productCount === 0) {
+    console.log("🌱 Seeding products...");
+
+    const seedProducts = [
+      ["ETOABN-TH", "Etoricoxib 60mg + Thiocolchicoside 4mg", "Tablet", "Tablets", "10x10 Alu-Alu", "Premium pain relief formulation."],
+      ["ETOABN-120", "Etoricoxib 120mg", "Tablet", "Tablets", "10x10 Alu-Alu", "High strength Etoricoxib tablet."],
+      ["UROABN-300", "Ursodeoxycholic acid 300mg", "Tablet", "Tablets", "10x1x10 Alu", "Liver support formulation."],
+      ["ABC-500", "Levofloxacin 500mg", "Tablet", "Tablets", "10x10 Alu-Alu", "Broad-spectrum antibiotic."],
+      ["ABCNET-FX", "Montelukast 10mg + Fexofenadine 120mg", "Tablet", "Tablets", "10x10 Alu-Alu", "Anti-allergic combination."],
+      ["ABNZID-600", "Linezolid 600mg", "Tablet", "Tablets", "10x1x10 Alu", "Antibiotic tablet."],
+      ["PENCIV-DSR", "Pantoprazole 40mg + Domperidone 30mg", "Capsule", "Capsules", "10x10 Alu-Alu", "PPI combination capsule."],
+      ["REBCIV-DSR", "Rabeprazole 20mg + Domperidone 30mg", "Capsule", "Capsules", "10x10 Alu-Alu", "PPI combination capsule."],
+      ["ABNRAB-LSR", "Rabeprazole 20mg + Levosulpride 75mg", "Capsule", "Capsules", "10x10 Alu-Alu", "Gastro capsule."],
+      ["ESOABN-DSR", "Esomeprazole 40mg + Domperidone 30mg", "Capsule", "Capsules", "10x10 Alu-Alu", "PPI capsule."],
+      ["ABNMOX-CV-457", "Amoxycillin 400mg + Clavulanic Acid 57mg", "Dry Syrup", "Dry Syrup", "30 ML", "Antibiotic dry syrup."],
+      ["FIXOBEN-DS", "Cefixime 100mg", "Dry Syrup", "Dry Syrup", "30 ML", "Antibiotic dry syrup."],
+      ["ABNSVIT-L", "Multivitamin & Multimineral Drop", "Drops", "Drops", "30 ML", "Pediatric multivitamin drops."],
+      ["ABNTONE", "Ondansetron 2mg", "Drops", "Drops", "30 ML", "Anti-emetic drops."],
+      ["ABNDAC-GEL", "Diclofenac Gel", "Ointment", "Ointment", "30 GM", "Topical pain relief gel."],
+      ["KETOABN", "Ketoconazole 2%", "Ointment", "Ointment", "15 GM", "Antifungal cream."],
+      ["ABNLIV-DS", "Herbal Liver Tonic", "Herbal", "Herbal", "225 ML", "Ayurvedic liver tonic."],
+      ["MINDSET", "Complete Mind Health Solution", "Herbal", "Herbal", "200 ML", "Ayurvedic mind tonic."],
+      ["ABNSVIT-L", "Lycopene 6% + Multivitamin & Multimineral", "Liquid", "Liquid", "200 ML", "Nutritional liquid."],
+      ["COFRIBS-AM", "Terbutaline 1.25mg + Ambroxol 15mg + Guaiphenesin", "Liquid", "Liquid", "60 ML", "Cough syrup."],
+      ["ABNCEFT-250", "Ceftriaxone 250mg", "Injection", "Injection", "1x1 Vial", "Antibiotic injection."],
+      ["MEROABN-1GM", "Meropenem 1gm", "Injection", "Injection", "1x1 Vial", "Broad-spectrum antibiotic injection."],
+      ["ABNCIVO-ORS", "ORS Drink", "Energy Drink", "Energy Drink", "200 ML", "Oral rehydration solution."],
+    ];
+
+    const insertStmt = db.prepare(
+      "INSERT INTO products (name, composition, dosage_form, category, packing, description) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+
+    const insertMany = db.transaction((products) => {
+      for (const p of products) insertStmt.run(...p);
+    });
+    insertMany(seedProducts);
+
+    console.log(`✅ Seeded ${seedProducts.length} products.`);
+  } else {
+    console.log(`ℹ️  Products already seeded (${productCount} found).`);
+  }
+} catch (err) {
+  console.error("❌ Product seeding failed:", err.message);
+}
+// ==========================================
+
+// === AUTO-SEED CATEGORIES ON FIRST STARTUP ===
+try {
+  const catCount = db.prepare("SELECT COUNT(*) as c FROM categories").get().c;
+
+  if (catCount === 0) {
+    console.log("🌱 Seeding categories...");
+
+    const seedCategories = [
+      ["Tablets",     "💊", 1],
+      ["Capsules",    "💊", 2],
+      ["Liquid",      "🧴", 3],
+      ["Dry Syrup",   "🥤", 4],
+      ["Drops",       "💧", 5],
+      ["Injection",   "💉", 6],
+      ["Ointment",    "🧴", 7],
+      ["Herbal",      "🌿", 8],
+      ["Energy Drink","🥤", 9],
+    ];
+
+    const insertCat = db.prepare(
+      "INSERT INTO categories (name, icon, sort_order) VALUES (?, ?, ?)"
+    );
+
+    const insertCats = db.transaction((cats) => {
+      for (const c of cats) insertCat.run(...c);
+    });
+    insertCats(seedCategories);
+
+    console.log(`✅ Seeded ${seedCategories.length} categories.`);
+  } else {
+    console.log(`ℹ️  Categories already seeded (${catCount} found).`);
+  }
+} catch (err) {
+  console.error("❌ Category seeding failed:", err.message);
+}
+// ============================================
+
 // Behind Render/Railway/any reverse proxy, requests arrive from the proxy's
 // IP unless we trust the X-Forwarded-For header — required for rate
 // limiting (and req.ip generally) to see the real client, not the proxy.
@@ -86,6 +200,11 @@ app.post("/api/auth/login",loginLimiter,(req,res)=>{
 });
 app.get("/api/products",(req,res)=>res.json(db.prepare("SELECT * FROM products WHERE active=1 ORDER BY id DESC").all()));
 app.get("/api/products/:id",(req,res)=>{const p=db.prepare("SELECT * FROM products WHERE id=? AND active=1").get(req.params.id);p?res.json(p):res.status(404).json({message:"Not found"})});
+
+// === PUBLIC CATEGORIES ENDPOINT ===
+app.get("/api/categories",(req,res)=>res.json(db.prepare("SELECT * FROM categories WHERE active=1 ORDER BY sort_order ASC, id ASC").all()));
+// ==================================
+
 app.post("/api/enquiries",enquiryLimiter,ah(async(req,res)=>{
  const {errors,data}=validateEnquiry(req.body||{});
  if(errors.length)return res.status(400).json({message:errors[0]});
@@ -151,6 +270,31 @@ app.patch("/api/admin/enquiries/:id",auth,(req,res)=>{
  res.json({ok:true});
 });
 app.get("/api/admin/audit-logs",auth,(req,res)=>res.json(db.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500").all()));
+
+// === ADMIN CATEGORIES ROUTES ===
+app.get("/api/admin/categories",auth,(req,res)=>res.json(db.prepare("SELECT * FROM categories ORDER BY sort_order ASC, id ASC").all()));
+
+app.post("/api/admin/categories",auth,(req,res)=>{
+  const {name,icon,icon_url,sort_order}=req.body||{};
+  if(!name)return res.status(400).json({message:"Name is required"});
+  const r=db.prepare("INSERT INTO categories(name,icon,icon_url,sort_order) VALUES(?,?,?,?)").run(name,icon||"💊",icon_url||"",sort_order||0);
+  db.prepare("INSERT INTO audit_logs(admin_id,action,entity,entity_id) VALUES(?,?,?,?)").run(req.user.id,"CREATE","category",r.lastInsertRowid);
+  res.status(201).json({id:r.lastInsertRowid});
+});
+
+app.put("/api/admin/categories/:id",auth,(req,res)=>{
+  const {name,icon,icon_url,sort_order,active}=req.body||{};
+  db.prepare("UPDATE categories SET name=?,icon=?,icon_url=?,sort_order=?,active=? WHERE id=?").run(name,icon||"💊",icon_url||"",sort_order||0,active??1,req.params.id);
+  db.prepare("INSERT INTO audit_logs(admin_id,action,entity,entity_id) VALUES(?,?,?,?)").run(req.user.id,"UPDATE","category",req.params.id);
+  res.json({ok:true});
+});
+
+app.delete("/api/admin/categories/:id",auth,(req,res)=>{
+  db.prepare("UPDATE categories SET active=0 WHERE id=?").run(req.params.id);
+  db.prepare("INSERT INTO audit_logs(admin_id,action,entity,entity_id) VALUES(?,?,?,?)").run(req.user.id,"DELETE","category",req.params.id);
+  res.json({ok:true});
+});
+// ===============================
 
 const upload=multer({dest:"uploads/",limits:{fileSize:5*1024*1024}});
 // SVG is deliberately excluded — an uploaded SVG can carry an embedded
