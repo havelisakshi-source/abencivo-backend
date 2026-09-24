@@ -3,9 +3,12 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
-    "start": "node server/index.js",
-    "start:prod": "NODE_ENV=production node server/index.js",
+    "start": "NODE_OPTIONS=--openssl-legacy-provider node server/index.js",
+    "start:prod": "NODE_ENV=production NODE_OPTIONS=--openssl-legacy-provider node server/index.js",
     "seed": "node server/seed.js"
   },
   "dependencies": {
@@ -17,8 +20,8 @@
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
-    "mongodb": "^7.6.0",
+    "mongodb": "^6.10.0",
     "multer": "^2.0.2",
-    "nodemailer": "^10.0.10"
+    "nodemailer": "^6.9.16"
   }
 }

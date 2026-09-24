@@ -3,33 +3,35 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const uri = process.env.MONGODB_URI;
+
+// These options force Node to use compatible TLS settings
+const options = {
+  tls: true,
+  tlsAllowInvalidCertificates: true, // Bypasses SSL alert 80 (Use only if necessary)
+  tlsAllowInvalidHostnames: true,
+  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+};
+
 let client;
-let db;
+let clientPromise;
 
-export async function connectDB() {
-  if (db) return db; // Return the existing connection if already connected
-
-  const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    console.error("❌ MONGODB_URI is not set in environment variables!");
-    process.exit(1);
-  }
-
-  try {
-    client = new MongoClient(uri);
-    await client.connect();
-    db = client.db('abencivo_db'); // The database name inside your cluster
-    console.log('✅ Connected to MongoDB Atlas successfully!');
-    return db;
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
-  }
+if (!process.env.MONGODB_URI) {
+  throw new Error('Please add your Mongo URI to .env');
 }
 
-export function getDB() {
-  if (!db) {
-    throw new Error("Database not initialized. Call connectDB first.");
+if (process.env.NODE_ENV === 'development') {
+  // In development mode, use a global variable so that the value
+  // is preserved across module reloads caused by HMR (Hot Module Replacement).
+  if (!global._mongoClientPromise) {
+    client = new MongoClient(uri, options);
+    global._mongoClientPromise = client.connect();
   }
-  return db;
+  clientPromise = global._mongoClientPromise;
+} else {
+  // In production mode, it's best to not use a global variable.
+  client = new MongoClient(uri, options);
+  clientPromise = client.connect();
 }
+
+export default clientPromise;
