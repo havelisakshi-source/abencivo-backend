@@ -17,6 +17,7 @@
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
+    "mongodb": "^7.6.0",
     "multer": "^2.0.2",
     "nodemailer": "^10.0.10"
   }
