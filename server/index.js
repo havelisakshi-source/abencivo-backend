@@ -9,10 +9,11 @@ import path from "path";
 import fs from "fs";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { connectDB, getDB } from "./db.js"; // Updated import
-import {auth} from "./auth.js";
-import {recipientFor} from "./team.js";
-import {validateEnquiry, validateProduct, validateStatus} from "./validate.js";
+import { ObjectId } from "mongodb"; // <--- CRITICAL FIX: Added missing ObjectId import
+import { connectDB } from "./db.js"; 
+import { auth } from "./auth.js";
+import { recipientFor } from "./team.js";
+import { validateEnquiry, validateProduct, validateStatus } from "./validate.js";
 
 dotenv.config();
 const app = express();
@@ -159,7 +160,18 @@ async function startServer() {
     let emailed=false;
     if(process.env.SMTP_HOST&&person.email){
       try{
-        const transporter=nodemailer.createTransport({host:process.env.SMTP_HOST,port:Number(process.env.SMTP_PORT||587),secure:String(process.env.SMTP_SECURE)==="true",auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS}});
+        // UPDATED: Added TLS fix directly here to prevent SSL errors
+        const transporter=nodemailer.createTransport({
+          host:process.env.SMTP_HOST,
+          port:Number(process.env.SMTP_PORT||587),
+          secure:String(process.env.SMTP_SECURE)==="true",
+          auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS},
+          tls: {
+            rejectUnauthorized: false,
+            minVersion: 'TLSv1.2'
+          }
+        });
+        
         await transporter.sendMail({
           from:process.env.MAIL_FROM||process.env.SMTP_USER, to:person.email,
           subject:`[${enquiryType}] New enquiry #${enquiryId} — ${name}`,

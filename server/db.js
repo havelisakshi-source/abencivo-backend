@@ -4,34 +4,40 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const uri = process.env.MONGODB_URI;
-
-// These options force Node to use compatible TLS settings
-const options = {
-  tls: true,
-  tlsAllowInvalidCertificates: true, // Bypasses SSL alert 80 (Use only if necessary)
-  tlsAllowInvalidHostnames: true,
-  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-};
+const dbName = process.env.DB_NAME || 'abencivo-biotech'; // Fallback to a default name if not set
 
 let client;
-let clientPromise;
+let db;
 
-if (!process.env.MONGODB_URI) {
-  throw new Error('Please add your Mongo URI to .env');
-}
-
-if (process.env.NODE_ENV === 'development') {
-  // In development mode, use a global variable so that the value
-  // is preserved across module reloads caused by HMR (Hot Module Replacement).
-  if (!global._mongoClientPromise) {
-    client = new MongoClient(uri, options);
-    global._mongoClientPromise = client.connect();
+export const connectDB = async () => {
+  if (!uri) {
+    throw new Error('Please add your MONGODB_URI to .env or Render Environment Variables');
   }
-  clientPromise = global._mongoClientPromise;
-} else {
-  // In production mode, it's best to not use a global variable.
-  client = new MongoClient(uri, options);
-  clientPromise = client.connect();
-}
 
-export default clientPromise;
+  // If already connected, return the existing connection
+  if (db) return db;
+
+  try {
+    client = new MongoClient(uri, {
+      tls: true,
+      tlsAllowInvalidCertificates: true, // Fixes the SSL Alert 80
+      tlsAllowInvalidHostnames: true,
+      serverSelectionTimeoutMS: 5000,
+    });
+
+    await client.connect();
+    db = client.db(dbName);
+    console.log(`✅ MongoDB connected successfully to database: ${dbName}`);
+    return db;
+  } catch (error) {
+    console.error('❌ MongoDB connection error:', error);
+    process.exit(1); // Stop the app if the DB fails to connect
+  }
+};
+
+export const getDB = () => {
+  if (!db) {
+    throw new Error('Database not initialized. You must call connectDB() before getDB()');
+  }
+  return db;
+};
