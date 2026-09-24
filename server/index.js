@@ -9,7 +9,8 @@ import path from "path";
 import fs from "fs";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { ObjectId } from "mongodb"; // <--- CRITICAL FIX: Added missing ObjectId import
+import crypto from "crypto"; // Added for reset tokens
+import { ObjectId } from "mongodb";
 import { connectDB } from "./db.js"; 
 import { auth } from "./auth.js";
 import { recipientFor } from "./team.js";
@@ -24,8 +25,8 @@ async function startServer() {
   const db = await connectDB();
 
   // === FORCE CREATE ADMIN ACCOUNT ON STARTUP ===
-  const adminEmail = "admin@abencivobiotech.com";
-  const adminPassword = "AbencivoAdmin2026!";
+  const adminEmail = process.env.ADMIN_EMAIL || "abencivobiotech@gmail.com"; // Updated Email
+  const adminPassword = process.env.ADMIN_PASSWORD || "AbencivoAdmin2026!";
   try {
     const existingAdmin = await db.collection('admins').findOne({ email: adminEmail });
     if (!existingAdmin) {
@@ -44,7 +45,6 @@ async function startServer() {
     const productCount = await db.collection('products').countDocuments();
     if (productCount === 0) {
       console.log("🌱 Seeding products...");
-
       const seedProducts = [
         { name: "ETOABN-TH", composition: "Etoricoxib 60mg + Thiocolchicoside 4mg", dosage_form: "Tablet", category: "Tablets", packing: "10x10 Alu-Alu", description: "Premium pain relief formulation.", active: 1, image_url: "" },
         { name: "ETOABN-120", composition: "Etoricoxib 120mg", dosage_form: "Tablet", category: "Tablets", packing: "10x10 Alu-Alu", description: "High strength Etoricoxib tablet.", active: 1, image_url: "" },
@@ -99,7 +99,6 @@ async function startServer() {
   } catch (err) {
     console.error("❌ Category seeding failed:", err.message);
   }
-  // ============================================
 
   // Middleware
   app.set("trust proxy", 1);
@@ -118,6 +117,92 @@ async function startServer() {
 
   // === ROUTES ===
   app.get("/api/health",(req,res)=>res.json({ok:true,service:"Abencivo Biotech API"}));
+
+  // --- FORGOT PASSWORD ROUTES ---
+  app.post("/api/auth/forgot-password", loginLimiter, ah(async (req, res) => {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ message: "Email is required" });
+
+    const admin = await db.collection('admins').findOne({ email });
+    if (!admin) {
+      return res.json({ message: "If an account with that email exists, a reset link has been sent." });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpires = Date.now() + 15 * 60 * 1000; // 15 mins
+
+    await db.collection('admins').updateOne(
+      { _id: admin._id },
+      { $set: { reset_password_token: resetToken, reset_password_expires: resetExpires } }
+    );
+
+    if (process.env.SMTP_HOST) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT || 587),
+          secure: String(process.env.SMTP_SECURE) === "true",
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+          tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' }
+        });
+
+        const frontendUrl = process.env.FRONTEND_URL || "https://abencivo-biotech.vercel.app";
+        const resetLink = `${frontendUrl}/#/reset-password?token=${resetToken}`;
+
+        await transporter.sendMail({
+          from: process.env.MAIL_FROM || process.env.SMTP_USER,
+          to: email,
+          subject: "Password Reset Request - Abencivo Biotech",
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #dc2626;">Password Reset Request</h2>
+              <p>You requested to reset your admin password.</p>
+              <p>Click the button below to set a new password. This link is valid for 15 minutes.</p>
+              <a href="${resetLink}" style="background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0;">Reset Password</a>
+              <p>If you didn't request this, please ignore this email. Your password will remain unchanged.</p>
+            </div>
+          `
+        });
+        console.log(`Reset email sent to ${email}`);
+      } catch (error) {
+        console.error("Failed to send reset email:", error);
+        return res.status(500).json({ message: "Error sending email. Please try again later." });
+      }
+    } else {
+      console.log(`SMTP not configured. Reset link for ${email}: ${frontendUrl}/#/reset-password?token=${resetToken}`);
+    }
+
+    res.json({ message: "If an account with that email exists, a reset link has been sent." });
+  }));
+
+  app.post("/api/auth/reset-password", ah(async (req, res) => {
+    const { token, newPassword } = req.body || {};
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: "Token and new password are required" });
+    }
+
+    const admin = await db.collection('admins').findOne({
+      reset_password_token: token,
+      reset_password_expires: { $gt: Date.now() }
+    });
+
+    if (!admin) {
+      return res.status(400).json({ message: "Password reset token is invalid or has expired." });
+    }
+
+    const hash = bcrypt.hashSync(newPassword, 10);
+
+    await db.collection('admins').updateOne(
+      { _id: admin._id },
+      { 
+        $set: { password_hash: hash },
+        $unset: { reset_password_token: "", reset_password_expires: "" }
+      }
+    );
+
+    res.json({ message: "Password has been successfully reset. You can now log in." });
+  }));
+  // --- END FORGOT PASSWORD ROUTES ---
 
   app.post("/api/auth/login",loginLimiter,ah(async (req,res)=>{
     const {email,password}=req.body||{};
@@ -160,16 +245,12 @@ async function startServer() {
     let emailed=false;
     if(process.env.SMTP_HOST&&person.email){
       try{
-        // UPDATED: Added TLS fix directly here to prevent SSL errors
         const transporter=nodemailer.createTransport({
           host:process.env.SMTP_HOST,
           port:Number(process.env.SMTP_PORT||587),
           secure:String(process.env.SMTP_SECURE)==="true",
           auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS},
-          tls: {
-            rejectUnauthorized: false,
-            minVersion: 'TLSv1.2'
-          }
+          tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' }
         });
         
         await transporter.sendMail({
@@ -318,7 +399,6 @@ async function startServer() {
   app.listen(port,()=>console.log(`API running on http://localhost:${port}`));
 }
 
-// Start the server by calling the async function
 startServer().catch(err => {
   console.error("❌ Failed to start server:", err);
   process.exit(1);
