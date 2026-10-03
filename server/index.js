@@ -359,7 +359,7 @@ async function startServer() {
     // Return the actual brochure link
     res.json({ 
       message: "Verification successful!", 
-      brochureUrl: "/uploads/abencivo-brochure.pdf" // <-- REPLACE THIS WITH YOUR ACTUAL UPLOADED PDF PATH
+      brochureUrl: "https://abencivo-biotech.vercel.app/abencivo-brochure.pdf" // <-- REPLACE THIS WITH YOUR ACTUAL UPLOADED PDF PATH
     });
   }));
 
