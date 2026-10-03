@@ -9,7 +9,7 @@ import path from "path";
 import fs from "fs";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import crypto from "crypto"; // Added for reset tokens & OTP
+import crypto from "crypto";
 import { ObjectId } from "mongodb";
 import { connectDB } from "./db.js"; 
 import { auth } from "./auth.js";
@@ -274,31 +274,20 @@ async function startServer() {
     res.status(201).json({message:emailed?`Enquiry submitted. ${person.name} has been notified.`:"Enquiry submitted successfully.",id:enquiryId});
   }));
 
-  // === BROCHURE DOWNLOAD FLOW (NEW) ===
-  
-  // 1. Request OTP
+  // === BROCHURE DOWNLOAD FLOW ===
   app.post("/api/brochure/request-otp", enquiryLimiter, ah(async (req, res) => {
     const { name, phone, email } = req.body || {};
     if (!name || !phone || !email) {
       return res.status(400).json({ message: "Name, phone, and email are required." });
     }
 
-    // Generate a 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
 
-    // Save lead to database
     await db.collection('brochure_leads').insertOne({
-      name,
-      phone,
-      email,
-      otp,
-      expiresAt,
-      verified: false,
-      created_at: new Date()
+      name, phone, email, otp, expiresAt, verified: false, created_at: new Date()
     });
 
-    // Send the OTP email
     if (process.env.SMTP_HOST) {
       try {
         const transporter = nodemailer.createTransport({
@@ -331,35 +320,27 @@ async function startServer() {
     } else {
       console.log(`SMTP not configured. Brochure OTP for ${email}: ${otp}`);
     }
-
     res.json({ message: "Verification code sent to your email." });
   }));
 
-  // 2. Verify OTP and unlock brochure
   app.post("/api/brochure/verify-otp", ah(async (req, res) => {
     const { email, otp } = req.body || {};
     if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required." });
 
-    const lead = await db.collection('brochure_leads').findOne({ 
-      email, 
-      otp, 
-      expiresAt: { $gt: Date.now() } 
-    });
+    const lead = await db.collection('brochure_leads').findOne({ email, otp, expiresAt: { $gt: Date.now() } });
 
     if (!lead) {
       return res.status(400).json({ message: "Invalid or expired verification code." });
     }
 
-    // Mark as verified
     await db.collection('brochure_leads').updateOne(
       { _id: lead._id },
       { $set: { verified: true, verified_at: new Date() } }
     );
 
-    // Return the actual brochure link
     res.json({ 
       message: "Verification successful!", 
-      brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf" // <-- REPLACE THIS WITH YOUR ACTUAL UPLOADED PDF PATH
+      brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf" 
     });
   }));
 
@@ -418,7 +399,19 @@ async function startServer() {
     res.json({ok:true});
   }));
 
-  // NEW: Admin route to view Brochure Leads
+  // === NEW: DELETE ENQUIRY ROUTE ===
+  app.delete("/api/admin/enquiries/:id", auth, ah(async (req, res) => {
+    await db.collection('enquiries').deleteOne({ _id: new ObjectId(req.params.id) });
+    await db.collection('audit_logs').insertOne({
+      admin_id: req.user.id, 
+      action: "DELETE", 
+      entity: "enquiry", 
+      entity_id: req.params.id, 
+      created_at: new Date()
+    });
+    res.json({ ok: true, message: "Enquiry deleted successfully" });
+  }));
+
   app.get("/api/admin/brochure-leads", auth, ah(async (req, res) => {
     const leads = await db.collection('brochure_leads').find().sort({ created_at: -1 }).toArray();
     res.json(leads.map(l => ({ ...l, id: l._id.toString() })));
@@ -427,6 +420,12 @@ async function startServer() {
   app.get("/api/admin/audit-logs",auth,ah(async (req,res)=>{
     const logs = await db.collection('audit_logs').find().sort({created_at:-1}).limit(500).toArray();
     res.json(logs.map(l => ({...l, id: l._id.toString()})));
+  }));
+
+  // === NEW: DELETE AUDIT LOG ROUTE ===
+  app.delete("/api/admin/audit-logs/:id", auth, ah(async (req, res) => {
+    await db.collection('audit_logs').deleteOne({ _id: new ObjectId(req.params.id) });
+    res.json({ ok: true, message: "Log deleted successfully" });
   }));
 
   // === ADMIN CATEGORIES ROUTES ===
