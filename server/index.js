@@ -387,10 +387,17 @@ async function startServer() {
     res.json(enquiries.map(e => ({...e, id: e._id.toString()})));
   }));
 
+  // === UPDATED: PATCH ENQUIRY STATUS (Prevents duplicate logs) ===
   app.patch("/api/admin/enquiries/:id",auth,ah(async (req,res)=>{
     const {errors,data}=validateStatus(req.body||{});
     if(errors.length)return res.status(400).json({message:errors[0]});
     
+    // Check current status to prevent duplicate audit logs
+    const existingEnquiry = await db.collection('enquiries').findOne({_id: new ObjectId(req.params.id)});
+    if (existingEnquiry && existingEnquiry.status === data.status) {
+      return res.json({ok: true, message: "Status unchanged"}); 
+    }
+
     await db.collection('enquiries').updateOne(
       {_id: new ObjectId(req.params.id)},
       {$set: {status: data.status}}
