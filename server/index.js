@@ -9,7 +9,7 @@ import path from "path";
 import fs from "fs";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import crypto from "crypto"; // Added for reset tokens
+import crypto from "crypto"; // Added for reset tokens & OTP
 import { ObjectId } from "mongodb";
 import { connectDB } from "./db.js"; 
 import { auth } from "./auth.js";
@@ -25,7 +25,7 @@ async function startServer() {
   const db = await connectDB();
 
   // === FORCE CREATE ADMIN ACCOUNT ON STARTUP ===
-  const adminEmail = process.env.ADMIN_EMAIL || "abencivobiotech@gmail.com"; // Updated Email
+  const adminEmail = process.env.ADMIN_EMAIL || "abencivobiotech@gmail.com";
   const adminPassword = process.env.ADMIN_PASSWORD || "AbencivoAdmin2026!";
   try {
     const existingAdmin = await db.collection('admins').findOne({ email: adminEmail });
@@ -274,6 +274,95 @@ async function startServer() {
     res.status(201).json({message:emailed?`Enquiry submitted. ${person.name} has been notified.`:"Enquiry submitted successfully.",id:enquiryId});
   }));
 
+  // === BROCHURE DOWNLOAD FLOW (NEW) ===
+  
+  // 1. Request OTP
+  app.post("/api/brochure/request-otp", enquiryLimiter, ah(async (req, res) => {
+    const { name, phone, email } = req.body || {};
+    if (!name || !phone || !email) {
+      return res.status(400).json({ message: "Name, phone, and email are required." });
+    }
+
+    // Generate a 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+
+    // Save lead to database
+    await db.collection('brochure_leads').insertOne({
+      name,
+      phone,
+      email,
+      otp,
+      expiresAt,
+      verified: false,
+      created_at: new Date()
+    });
+
+    // Send the OTP email
+    if (process.env.SMTP_HOST) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT || 587),
+          secure: String(process.env.SMTP_SECURE) === "true",
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+          tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' }
+        });
+
+        await transporter.sendMail({
+          from: process.env.MAIL_FROM || process.env.SMTP_USER,
+          to: email,
+          subject: "Your Verification Code - Abencivo Biotech",
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: center;">
+              <h2 style="color: #dc2626;">Verify your email</h2>
+              <p>Hi ${name},</p>
+              <p>Use the code below to verify your email and download our brochure:</p>
+              <h1 style="background: #fce7e7; color: #dc2626; padding: 15px; border-radius: 8px; letter-spacing: 5px; display: inline-block;">${otp}</h1>
+              <p>This code expires in 10 minutes.</p>
+            </div>
+          `
+        });
+        console.log(`Brochure OTP sent to ${email}`);
+      } catch (error) {
+        console.error("Failed to send OTP email:", error);
+        return res.status(500).json({ message: "Error sending verification email." });
+      }
+    } else {
+      console.log(`SMTP not configured. Brochure OTP for ${email}: ${otp}`);
+    }
+
+    res.json({ message: "Verification code sent to your email." });
+  }));
+
+  // 2. Verify OTP and unlock brochure
+  app.post("/api/brochure/verify-otp", ah(async (req, res) => {
+    const { email, otp } = req.body || {};
+    if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required." });
+
+    const lead = await db.collection('brochure_leads').findOne({ 
+      email, 
+      otp, 
+      expiresAt: { $gt: Date.now() } 
+    });
+
+    if (!lead) {
+      return res.status(400).json({ message: "Invalid or expired verification code." });
+    }
+
+    // Mark as verified
+    await db.collection('brochure_leads').updateOne(
+      { _id: lead._id },
+      { $set: { verified: true, verified_at: new Date() } }
+    );
+
+    // Return the actual brochure link
+    res.json({ 
+      message: "Verification successful!", 
+      brochureUrl: "/uploads/abencivo-brochure.pdf" // <-- REPLACE THIS WITH YOUR ACTUAL UPLOADED PDF PATH
+    });
+  }));
+
   // === ADMIN ROUTES ===
   app.get("/api/admin/products",auth,ah(async (req,res)=>{
     const products = await db.collection('products').find().sort({_id:-1}).toArray();
@@ -327,6 +416,12 @@ async function startServer() {
     );
     await db.collection('audit_logs').insertOne({admin_id: req.user.id, action: "STATUS", entity: "enquiry", entity_id: req.params.id, created_at: new Date()});
     res.json({ok:true});
+  }));
+
+  // NEW: Admin route to view Brochure Leads
+  app.get("/api/admin/brochure-leads", auth, ah(async (req, res) => {
+    const leads = await db.collection('brochure_leads').find().sort({ created_at: -1 }).toArray();
+    res.json(leads.map(l => ({ ...l, id: l._id.toString() })));
   }));
 
   app.get("/api/admin/audit-logs",auth,ah(async (req,res)=>{
