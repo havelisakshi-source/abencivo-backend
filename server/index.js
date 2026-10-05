@@ -274,73 +274,26 @@ async function startServer() {
     res.status(201).json({message:emailed?`Enquiry submitted. ${person.name} has been notified.`:"Enquiry submitted successfully.",id:enquiryId});
   }));
 
-  // === BROCHURE DOWNLOAD FLOW ===
-  app.post("/api/brochure/request-otp", enquiryLimiter, ah(async (req, res) => {
+  // === BROCHURE DOWNLOAD FLOW (SIMPLIFIED - NO OTP) ===
+  app.post("/api/brochure/submit", enquiryLimiter, ah(async (req, res) => {
     const { name, phone, email } = req.body || {};
     if (!name || !phone || !email) {
       return res.status(400).json({ message: "Name, phone, and email are required." });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
-
+    // Save the lead directly to the database
     await db.collection('brochure_leads').insertOne({
-      name, phone, email, otp, expiresAt, verified: false, created_at: new Date()
+      name,
+      phone,
+      email,
+      status: "Downloaded",
+      downloaded_at: new Date(),
+      created_at: new Date()
     });
 
-    if (process.env.SMTP_HOST) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT || 587),
-          secure: String(process.env.SMTP_SECURE) === "true",
-          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-          tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' }
-        });
-
-        await transporter.sendMail({
-          from: process.env.MAIL_FROM || process.env.SMTP_USER,
-          to: email,
-          subject: "Your Verification Code - Abencivo Biotech",
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: center;">
-              <h2 style="color: #dc2626;">Verify your email</h2>
-              <p>Hi ${name},</p>
-              <p>Use the code below to verify your email and download our brochure:</p>
-              <h1 style="background: #fce7e7; color: #dc2626; padding: 15px; border-radius: 8px; letter-spacing: 5px; display: inline-block;">${otp}</h1>
-              <p>This code expires in 10 minutes.</p>
-            </div>
-          `
-        });
-        console.log(`Brochure OTP sent to ${email}`);
-      } catch (error) {
-        console.error("Failed to send OTP email:", error);
-        return res.status(500).json({ message: "Error sending verification email." });
-      }
-    } else {
-      console.log(`SMTP not configured. Brochure OTP for ${email}: ${otp}`);
-    }
-    res.json({ message: "Verification code sent to your email." });
-  }));
-
-  app.post("/api/brochure/verify-otp", ah(async (req, res) => {
-    const { email, otp } = req.body || {};
-    if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required." });
-
-    const lead = await db.collection('brochure_leads').findOne({ email, otp, expiresAt: { $gt: Date.now() } });
-
-    if (!lead) {
-      return res.status(400).json({ message: "Invalid or expired verification code." });
-    }
-
-    await db.collection('brochure_leads').updateOne(
-      { _id: lead._id },
-      { $set: { verified: true, verified_at: new Date() } }
-    );
-
-    res.json({ 
-      message: "Verification successful!", 
-      brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf" 
+    res.json({
+      message: "Details submitted successfully!",
+      brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf"
     });
   }));
 
@@ -387,7 +340,7 @@ async function startServer() {
     res.json(enquiries.map(e => ({...e, id: e._id.toString()})));
   }));
 
-  // === UPDATED: PATCH ENQUIRY STATUS (Prevents duplicate logs) ===
+  // === PATCH ENQUIRY STATUS (Prevents duplicate logs) ===
   app.patch("/api/admin/enquiries/:id",auth,ah(async (req,res)=>{
     const {errors,data}=validateStatus(req.body||{});
     if(errors.length)return res.status(400).json({message:errors[0]});
@@ -406,7 +359,7 @@ async function startServer() {
     res.json({ok:true});
   }));
 
-  // === NEW: DELETE ENQUIRY ROUTE ===
+  // === DELETE ENQUIRY ROUTE ===
   app.delete("/api/admin/enquiries/:id", auth, ah(async (req, res) => {
     await db.collection('enquiries').deleteOne({ _id: new ObjectId(req.params.id) });
     await db.collection('audit_logs').insertOne({
@@ -429,7 +382,7 @@ async function startServer() {
     res.json(logs.map(l => ({...l, id: l._id.toString()})));
   }));
 
-  // === NEW: DELETE AUDIT LOG ROUTE ===
+  // === DELETE AUDIT LOG ROUTE ===
   app.delete("/api/admin/audit-logs/:id", auth, ah(async (req, res) => {
     await db.collection('audit_logs').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true, message: "Log deleted successfully" });
