@@ -112,6 +112,8 @@ async function startServer() {
   const ah=fn=>(req,res,next)=>fn(req,res,next).catch(next);
   const loginLimiter=rateLimit({windowMs:15*60*1000,max:5,standardHeaders:true,legacyHeaders:false,message:{message:"Too many login attempts. Please try again in 15 minutes."}});
   const enquiryLimiter=rateLimit({windowMs:60*60*1000,max:20,standardHeaders:true,legacyHeaders:false,message:{message:"Too many enquiries from this network. Please try again later."}});
+  // NEW: A separate, more permissive limiter just for brochure downloads
+  const brochureLimiter=rateLimit({windowMs:60*60*1000,max:100,standardHeaders:true,legacyHeaders:false,message:{message:"Too many downloads from this network. Please try again later."}});
   const apiLimiter=rateLimit({windowMs:15*60*1000,max:300,standardHeaders:true,legacyHeaders:false});
   app.use("/api",apiLimiter);
 
@@ -274,8 +276,8 @@ async function startServer() {
     res.status(201).json({message:emailed?`Enquiry submitted. ${person.name} has been notified.`:"Enquiry submitted successfully.",id:enquiryId});
   }));
 
-  // === BROCHURE DOWNLOAD FLOW (SIMPLIFIED - NO OTP WITH LOGGING) ===
-  app.post("/api/brochure/submit", enquiryLimiter, ah(async (req, res) => {
+  // === BROCHURE DOWNLOAD FLOW (SIMPLIFIED - NO OTP) ===
+  app.post("/api/brochure/submit", brochureLimiter, ah(async (req, res) => {
     try {
       const { name, phone, email } = req.body || {};
       if (!name || !phone || !email) {
@@ -284,7 +286,6 @@ async function startServer() {
 
       console.log("Received brochure submission:", { name, phone, email });
 
-      // Save the lead directly to the database
       const result = await db.collection('brochure_leads').insertOne({
         name,
         phone,
@@ -354,7 +355,6 @@ async function startServer() {
     const {errors,data}=validateStatus(req.body||{});
     if(errors.length)return res.status(400).json({message:errors[0]});
     
-    // Check current status to prevent duplicate audit logs
     const existingEnquiry = await db.collection('enquiries').findOne({_id: new ObjectId(req.params.id)});
     if (existingEnquiry && existingEnquiry.status === data.status) {
       return res.json({ok: true, message: "Status unchanged"}); 
