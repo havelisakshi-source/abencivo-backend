@@ -274,27 +274,36 @@ async function startServer() {
     res.status(201).json({message:emailed?`Enquiry submitted. ${person.name} has been notified.`:"Enquiry submitted successfully.",id:enquiryId});
   }));
 
-  // === BROCHURE DOWNLOAD FLOW (SIMPLIFIED - NO OTP) ===
+  // === BROCHURE DOWNLOAD FLOW (SIMPLIFIED - NO OTP WITH LOGGING) ===
   app.post("/api/brochure/submit", enquiryLimiter, ah(async (req, res) => {
-    const { name, phone, email } = req.body || {};
-    if (!name || !phone || !email) {
-      return res.status(400).json({ message: "Name, phone, and email are required." });
+    try {
+      const { name, phone, email } = req.body || {};
+      if (!name || !phone || !email) {
+        return res.status(400).json({ message: "Name, phone, and email are required." });
+      }
+
+      console.log("Received brochure submission:", { name, phone, email });
+
+      // Save the lead directly to the database
+      const result = await db.collection('brochure_leads').insertOne({
+        name,
+        phone,
+        email,
+        status: "Downloaded",
+        downloaded_at: new Date(),
+        created_at: new Date()
+      });
+
+      console.log("Inserted lead ID:", result.insertedId);
+
+      res.json({
+        message: "Details submitted successfully!",
+        brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf"
+      });
+    } catch (error) {
+      console.error("❌ Error in /api/brochure/submit:", error);
+      res.status(500).json({ message: error.message || "Internal server error" });
     }
-
-    // Save the lead directly to the database
-    await db.collection('brochure_leads').insertOne({
-      name,
-      phone,
-      email,
-      status: "Downloaded",
-      downloaded_at: new Date(),
-      created_at: new Date()
-    });
-
-    res.json({
-      message: "Details submitted successfully!",
-      brochureUrl: "https://abencivo-biotech.vercel.app/brochure.pdf"
-    });
   }));
 
   // === ADMIN ROUTES ===
