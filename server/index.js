@@ -11,6 +11,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
+import { v2 as cloudinary } from "cloudinary";
 import { connectDB } from "./db.js"; 
 import { auth } from "./auth.js";
 import { recipientFor } from "./team.js";
@@ -23,6 +24,13 @@ const port = process.env.PORT || 4000;
 // Connect to MongoDB and then start the server
 async function startServer() {
   const db = await connectDB();
+
+  // === CONFIGURE CLOUDINARY ===
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
 
   // === FORCE CREATE ADMIN ACCOUNT ON STARTUP ===
   const adminEmail = process.env.ADMIN_EMAIL || "abencivobiotech@gmail.com";
@@ -112,7 +120,6 @@ async function startServer() {
   const ah=fn=>(req,res,next)=>fn(req,res,next).catch(next);
   const loginLimiter=rateLimit({windowMs:15*60*1000,max:5,standardHeaders:true,legacyHeaders:false,message:{message:"Too many login attempts. Please try again in 15 minutes."}});
   const enquiryLimiter=rateLimit({windowMs:60*60*1000,max:20,standardHeaders:true,legacyHeaders:false,message:{message:"Too many enquiries from this network. Please try again later."}});
-  // NEW: A separate, more permissive limiter just for brochure downloads
   const brochureLimiter=rateLimit({windowMs:60*60*1000,max:100,standardHeaders:true,legacyHeaders:false,message:{message:"Too many downloads from this network. Please try again later."}});
   const apiLimiter=rateLimit({windowMs:15*60*1000,max:300,standardHeaders:true,legacyHeaders:false});
   app.use("/api",apiLimiter);
@@ -131,7 +138,7 @@ async function startServer() {
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetExpires = Date.now() + 15 * 60 * 1000; // 15 mins
+    const resetExpires = Date.now() + 15 * 60 * 1000;
 
     await db.collection('admins').updateOne(
       { _id: admin._id },
@@ -204,7 +211,6 @@ async function startServer() {
 
     res.json({ message: "Password has been successfully reset. You can now log in." });
   }));
-  // --- END FORGOT PASSWORD ROUTES ---
 
   app.post("/api/auth/login",loginLimiter,ah(async (req,res)=>{
     const {email,password}=req.body||{};
@@ -284,8 +290,6 @@ async function startServer() {
         return res.status(400).json({ message: "Name, phone, and email are required." });
       }
 
-      console.log("Received brochure submission:", { name, phone, email });
-
       const result = await db.collection('brochure_leads').insertOne({
         name,
         phone,
@@ -295,7 +299,7 @@ async function startServer() {
         created_at: new Date()
       });
 
-      console.log("Inserted lead ID:", result.insertedId);
+      console.log("Brochure lead saved:", result.insertedId);
 
       res.json({
         message: "Details submitted successfully!",
@@ -350,7 +354,6 @@ async function startServer() {
     res.json(enquiries.map(e => ({...e, id: e._id.toString()})));
   }));
 
-  // === PATCH ENQUIRY STATUS (Prevents duplicate logs) ===
   app.patch("/api/admin/enquiries/:id",auth,ah(async (req,res)=>{
     const {errors,data}=validateStatus(req.body||{});
     if(errors.length)return res.status(400).json({message:errors[0]});
@@ -368,7 +371,6 @@ async function startServer() {
     res.json({ok:true});
   }));
 
-  // === DELETE ENQUIRY ROUTE ===
   app.delete("/api/admin/enquiries/:id", auth, ah(async (req, res) => {
     await db.collection('enquiries').deleteOne({ _id: new ObjectId(req.params.id) });
     await db.collection('audit_logs').insertOne({
@@ -391,7 +393,6 @@ async function startServer() {
     res.json(logs.map(l => ({...l, id: l._id.toString()})));
   }));
 
-  // === DELETE AUDIT LOG ROUTE ===
   app.delete("/api/admin/audit-logs/:id", auth, ah(async (req, res) => {
     await db.collection('audit_logs').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true, message: "Log deleted successfully" });
@@ -433,21 +434,40 @@ async function startServer() {
     res.json({ok:true});
   }));
 
-  // === UPLOAD ROUTE ===
-  const upload=multer({dest:"uploads/",limits:{fileSize:5*1024*1024}});
-  const ALLOWED_UPLOADS={".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".webp":"image/webp",".pdf":"application/pdf"};
-  
-  app.post("/api/admin/upload",auth,upload.single("file"),(req,res)=>{
-    if(!req.file)return res.status(400).json({message:"File required"});
-    const ext=path.extname(req.file.originalname).toLowerCase();
-    const expectedMime=ALLOWED_UPLOADS[ext];
-    if(!expectedMime||req.file.mimetype!==expectedMime){
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({message:"File type not allowed. Use JPG, PNG, WEBP or PDF."});
+  // === UPLOAD ROUTE (CLOUDINARY - PERMANENT STORAGE) ===
+  const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+  });
+  const ALLOWED_UPLOADS = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".webp":"image/webp",".pdf":"application/pdf"};
+
+  app.post("/api/admin/upload", auth, upload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "File required" });
+    
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const expectedMime = ALLOWED_UPLOADS[ext];
+    if (!expectedMime || req.file.mimetype !== expectedMime) {
+      return res.status(400).json({ message: "File type not allowed. Use JPG, PNG, WEBP or PDF." });
     }
-    const newName=`${Date.now()}-${req.file.filename}${ext}`;
-    fs.renameSync(req.file.path,path.join("uploads",newName));
-    res.json({url:`/uploads/${newName}`});
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: "abencivo", resource_type: "auto" },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        stream.end(req.file.buffer);
+      });
+
+      console.log("Cloudinary upload success:", result.secure_url);
+      res.json({ url: result.secure_url });
+    } catch (err) {
+      console.error("Cloudinary upload failed:", err);
+      res.status(500).json({ message: "Upload failed. Please try again." });
+    }
   });
 
   app.use((err,req,res,next)=>{
