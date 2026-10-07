@@ -24,7 +24,7 @@ const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
 // Must match the <select> options on the Contact page exactly — anything
 // else falls back to "General" rather than being trusted as free text that
 // later gets embedded in an email subject line.
-const ENQUIRY_TYPES = ["General", "PCD Franchise", "Third-Party Manufacturing", "Product Enquiry"];
+const ENQUIRY_TYPES = ["General", "PCD Franchise", "Third-Party Manufacturing", "Product Enquiry", "Franchise", "Newsletter"];
 
 export function validateEnquiry(body) {
   const errors = [];
@@ -51,15 +51,26 @@ export function validateProduct(body, {partial = false} = {}) {
   const dosage_form = str(body.dosage_form, 100);
   const category = str(body.category, 100) || "General";
   const description = str(body.description, 3000);
+  const packing = str(body.packing, 100);         // <-- ADDED
   let image_url = str(body.image_url, 300) || "/products/product-placeholder.svg";
+  
   // Only allow a same-site relative path or an http(s) URL — never
   // javascript:, data: or anything else that could be smuggled in here.
   if (!/^(\/|https?:\/\/)/i.test(image_url)) image_url = "/products/product-placeholder.svg";
 
+  // Handle MRP: allow empty string OR a valid number
+  let mrp = "";
+  if (body.mrp !== undefined && body.mrp !== null && body.mrp !== "") {
+    const num = Number(body.mrp);
+    if (!isNaN(num) && num >= 0) {
+      mrp = num;
+    }
+  }
+
   if (!partial && !name) errors.push("Product name is required.");
   const active = body.active === undefined ? 1 : (body.active ? 1 : 0);
 
-  return {errors, data: {name, composition, dosage_form, category, description, image_url, active}};
+  return {errors, data: {name, composition, dosage_form, category, description, image_url, packing, mrp, active}};
 }
 
 export function validateStatus(body) {
