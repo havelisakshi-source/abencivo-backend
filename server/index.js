@@ -393,6 +393,24 @@ async function startServer() {
     res.json(logs.map(l => ({...l, id: l._id.toString()})));
   }));
 
+  // === BULK DELETE AUDIT LOGS ROUTE (MUST come before /:id) ===
+  app.post("/api/admin/audit-logs/bulk-delete", auth, ah(async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: "No log IDs provided" });
+      }
+      const objectIds = ids.map(id => new ObjectId(id));
+      const result = await db.collection('audit_logs').deleteMany({ _id: { $in: objectIds } });
+      console.log(`Bulk deleted ${result.deletedCount} audit logs`);
+      res.json({ ok: true, deletedCount: result.deletedCount });
+    } catch (err) {
+      console.error("Bulk delete error:", err);
+      res.status(500).json({ message: "Bulk delete failed" });
+    }
+  }));
+
+  // === DELETE SINGLE AUDIT LOG ROUTE ===
   app.delete("/api/admin/audit-logs/:id", auth, ah(async (req, res) => {
     await db.collection('audit_logs').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true, message: "Log deleted successfully" });
